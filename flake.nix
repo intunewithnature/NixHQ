@@ -12,6 +12,7 @@
         modules = [
           ./configuration.nix
           ./hardware-vps.nix
+          { networking.hostName = "impious-vps"; }
         ];
       };
 
@@ -20,6 +21,7 @@
         modules = [
           ./configuration.nix
           ./hardware-test-server.nix
+          { networking.hostName = "test-server"; }
         ];
       };
     };
