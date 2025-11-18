@@ -73,6 +73,21 @@
     docker
     docker-compose
   ];
+  ################ Docker Compose stack: Caddy ########################################
+  systemd.services.caddy-stack = {
+    description = "Caddy (reverse proxy) Docker stack";
+    after = [ "docker.service" "network-online.target" ];
+    requires = [ "docker.service" ];
+    wantedBy = [ "multi-user.target" ];
+
+    serviceConfig = {
+      WorkingDirectory = "/opt/impious/deploy";
+      ExecStart = "${pkgs.docker-compose}/bin/docker-compose up -d";
+      ExecStop = "${pkgs.docker-compose}/bin/docker-compose down";
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+  };
 
   #################################### Flake Support ###################################
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
