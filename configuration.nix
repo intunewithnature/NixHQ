@@ -10,7 +10,7 @@
   boot.loader.grub.device = "/dev/vda";
 
   #################################### Networking #####################################
-  networking.hostName = "nixos";
+  networking.hostName = "impious-vps";
 
   # Firewall: SSH + HTTP/HTTPS
   networking.firewall = {
