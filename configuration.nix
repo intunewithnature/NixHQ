@@ -1,16 +1,12 @@
 { config, lib, pkgs, ... }:
 
 {
-  imports = [
-    ./hardware-configuration.nix
-  ];
 
   #################################### Boot Loader ####################################
   boot.loader.grub.enable = true;
   boot.loader.grub.device = "/dev/vda";
 
   #################################### Networking #####################################
-  networking.hostName = "impious-vps";
 
   # Firewall: SSH + HTTP/HTTPS
   networking.firewall = {
