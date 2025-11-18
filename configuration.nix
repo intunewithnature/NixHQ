@@ -75,12 +75,7 @@
   ];
 
   #################################### Flake Support ###################################
-  nix = {
-    package = pkgs.nixFlakes;
-    extraOptions = ''
-      experimental-features = nix-command flakes
-    '';
-  };
+  nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
   ################################ System State Version ################################
   system.stateVersion = "25.05";
