@@ -5,46 +5,46 @@
     ./hardware-configuration.nix
   ];
 
-  # Boot loader
+  #################################### Boot Loader ####################################
   boot.loader.grub.enable = true;
   boot.loader.grub.device = "/dev/vda";
 
-  # Basic networking
+  #################################### Networking #####################################
   networking.hostName = "nixos";
 
-  # Firewall: SSH + web ports (22, 80, 443)
+  # Firewall: SSH + HTTP/HTTPS
   networking.firewall = {
     enable = true;
     allowedTCPPorts = [ 22 80 443 ];
   };
 
-  # Swap file (2 GB)
+  ###################################### Swap #########################################
   swapDevices = [
     { device = "/swapfile"; size = 2048; }
   ];
 
-  # Time zone
+  ###################################### Timezone ######################################
   time.timeZone = "America/Detroit";
 
-  # Persistent system logs
+  ################################### System Logs ######################################
   services.journald.extraConfig = ''Storage=persistent'';
 
-  # App user with SSH key and sudo
+  #################################### Users ###########################################
   users.users.app = {
     isNormalUser = true;
     description = "App deployment user";
     home = "/home/app";
     shell = pkgs.bashInteractive;
-    extraGroups = [ "wheel" ]; # later: [ "wheel" "docker" ] when Docker is on
+    extraGroups = [ "wheel" "docker" ];
     openssh.authorizedKeys.keys = [
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIACt+4DDr57ov4803wmOWqw3umfSFPjTMHUTNNNvr0By eddsa-key-20251115"
     ];
   };
 
-  # Enable sudo for wheel
+  ###################################### Sudo ##########################################
   security.sudo.enable = true;
 
-  # OpenSSH daemon
+  ###################################### SSH ###########################################
   services.openssh = {
     enable = true;
     settings = {
@@ -53,20 +53,35 @@
       PasswordAuthentication = false;
       KbdInteractiveAuthentication = false;
     };
-    # Only allow SSH as "app"
     extraConfig = "AllowUsers app";
   };
 
-  # Basic brute-force protection
+  #################################### Security ########################################
   services.fail2ban.enable = true;
 
-  # Packages installed system-wide
+  ###################################### Docker ########################################
+  virtualisation.docker = {
+    enable = true;
+    autoPrune.enable = true;
+  };
+
+  ############################ System Packages (Global) #################################
   environment.systemPackages = with pkgs; [
     git
     nano
     htop
+    docker
+    docker-compose
   ];
 
-  # NixOS compatibility version for this machine
+  #################################### Flake Support ###################################
+  nix = {
+    package = pkgs.nixFlakes;
+    extraOptions = ''
+      experimental-features = nix-command flakes
+    '';
+  };
+
+  ################################ System State Version ################################
   system.stateVersion = "25.05";
 }
