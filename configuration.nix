@@ -70,7 +70,6 @@
     git
     nano
     htop
-    docker
     docker-compose
   ];
   ################ Docker Compose stack: Caddy ########################################
