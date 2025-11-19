@@ -1,10 +1,5 @@
-{ config, lib, pkgs, ... }:
-
 let
-  # Adjust this when you actually create the staging stack.
-  # For imperiumsolis.org you might later set:
-  #   stagingDir = "/opt/imperiumsolis/deploy";
-  stagingDir = "/opt/staging/deploy";
+  stagingDir = "/opt/impious/impious/deploy";
 in
 {
   systemd.services.caddy-stack = {
@@ -15,8 +10,6 @@ in
     after    = [ "network-online.target" "docker.service" ];
     requires = [ "network-online.target" "docker.service" ];
 
-    # If the directory doesn't exist, systemd will just skip the unit
-    # instead of failing the boot with a CHDIR error.
     unitConfig = {
       ConditionPathExists = stagingDir;
     };
