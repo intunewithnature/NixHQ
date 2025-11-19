@@ -1,0 +1,44 @@
+name: Cursor Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  pull-requests: write   # post comments
+  contents: read         # read source
+  issues: write          # optional, link to issues
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install Cursor CLI
+        run: |
+          curl -fsSL https://cursor.sh/install.sh | bash
+          echo "$HOME/.cursor/bin" >> $GITHUB_PATH
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "Cursor Agent"
+          git config user.email "cursoragent@example.com"
+
+      - name: Run Cursor review
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cursor-agent review \
+            --github-token="$GITHUB_TOKEN" \
+            --repo="${{ github.repository }}" \
+            --pr="${{ github.event.number }}" \
+            --diff-ref="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" \
+            --prompt="Act as a strict but concise code reviewer for the Impious project. Focus on security issues, reliability problems, and anything that could take the site or game down. Keep comments short and actionable (1–2 sentences), and avoid nitpicking formatting unless it hides a real bug."
