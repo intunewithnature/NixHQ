@@ -1,20 +1,18 @@
 { config, lib, pkgs, ... }:
 
 {
-
   #################################### Boot Loader ####################################
   boot.loader.grub.enable = true;
   boot.loader.grub.device = "/dev/vda";
 
   #################################### Networking #####################################
-
-  # Firewall: SSH + HTTP/HTTPS
   networking.firewall = {
     enable = true;
     allowedTCPPorts = [ 22 80 443 ];
   };
 
   ###################################### Swap #########################################
+  # Shared choice: 2G swapfile on both hosts
   swapDevices = [
     { device = "/swapfile"; size = 2048; }
   ];
@@ -32,7 +30,9 @@
     home = "/home/app";
     shell = pkgs.bashInteractive;
     extraGroups = [ "wheel" "docker" ];
+
     openssh.authorizedKeys.keys = [
+      # same key you had before – replace if needed
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIACt+4DDr57ov4803wmOWqw3umfSFPjTMHUTNNNvr0By eddsa-key-20251115"
     ];
   };
@@ -43,12 +43,15 @@
   ###################################### SSH ###########################################
   services.openssh = {
     enable = true;
+
     settings = {
       PermitEmptyPasswords = "no";
       PermitRootLogin = "no";
       PasswordAuthentication = false;
       KbdInteractiveAuthentication = false;
     };
+
+    # Only allow app over SSH
     extraConfig = "AllowUsers app";
   };
 
@@ -68,21 +71,6 @@
     htop
     docker-compose
   ];
-  ################ Docker Compose stack: Caddy ########################################
-  systemd.services.caddy-stack = {
-    description = "Caddy (reverse proxy) Docker stack";
-    after = [ "docker.service" "network-online.target" ];
-    requires = [ "docker.service" ];
-    wantedBy = [ "multi-user.target" ];
-
-    serviceConfig = {
-      WorkingDirectory = "/opt/impious/deploy";
-      ExecStart = "${pkgs.docker-compose}/bin/docker-compose up -d";
-      ExecStop = "${pkgs.docker-compose}/bin/docker-compose down";
-      Type = "oneshot";
-      RemainAfterExit = true;
-    };
-  };
 
   #################################### Flake Support ###################################
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
