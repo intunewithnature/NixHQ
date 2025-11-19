@@ -29,6 +29,9 @@
     description = "App deployment user";
     home = "/home/app";
     shell = pkgs.bashInteractive;
+
+    # NOTE: Membership in both wheel (sudo) and docker effectively grants root-equivalent
+    # capabilities. Keep this user tightly controlled and rotate its SSH key regularly.
     extraGroups = [ "wheel" "docker" ];
 
     openssh.authorizedKeys.keys = [
@@ -38,7 +41,12 @@
   };
 
   ###################################### Sudo ##########################################
-  security.sudo.enable = true;
+  security.sudo = {
+    enable = true;
+
+    # Keep privilege escalation accountable: wheel users must enter their own password.
+    wheelNeedsPassword = true;
+  };
 
   ###################################### SSH ###########################################
   services.openssh = {
@@ -56,7 +64,30 @@
   };
 
   #################################### Security ########################################
-  services.fail2ban.enable = true;
+  services.fail2ban = {
+    enable = true;
+
+    jails = {
+      DEFAULT = {
+        settings = {
+          # NixOS stores SSH auth logs in journald, so force Fail2ban to read from systemd.
+          backend = "systemd";
+        };
+      };
+
+      # Keep the scope tight: only protect SSH with a conservative ban window.
+      sshd = {
+        settings = {
+          enabled = true;
+          port = "ssh";
+          filter = "sshd";
+          banaction = "nftables-multiport";
+          maxretry = 5;
+          bantime = "15m";
+        };
+      };
+    };
+  };
 
   ###################################### Docker ########################################
   virtualisation.docker = {

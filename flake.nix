@@ -8,27 +8,15 @@
 
   outputs = { self, nixpkgs }: {
     nixosConfigurations = {
-      vps = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
+        vps = nixpkgs.lib.nixosSystem {
+          system = "x86_64-linux";
+          modules = [ ./hosts/vps.nix ];
+        };
 
-        modules = [
-          ./configuration.nix
-          ./hardware-vps.nix
-          ./modules/caddy-prod.nix
-          { networking.hostName = "impious-vps"; }
-        ];
-      };
-
-      test-server = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-
-        modules = [
-          ./configuration.nix
-          ./hardware-test-server.nix
-          ./modules/caddy-staging.nix
-          { networking.hostName = "test-server"; }
-        ];
-      };
+        test-server = nixpkgs.lib.nixosSystem {
+          system = "x86_64-linux";
+          modules = [ ./hosts/test-server.nix ];
+        };
     };
   };
 }
