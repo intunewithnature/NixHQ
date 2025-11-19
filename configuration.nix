@@ -55,8 +55,23 @@
     extraConfig = "AllowUsers app";
   };
 
-  #################################### Security ########################################
-  services.fail2ban.enable = true;
+    #################################### Security ########################################
+    services.fail2ban = {
+      enable = true;
+
+      # NixOS stores SSH auth logs in journald, so force Fail2ban to read from systemd.
+      settings."DEFAULT".backend = "systemd";
+
+      # Keep the scope tight: only protect SSH with a conservative ban window.
+      jails.sshd = ''
+        enabled  = true
+        port     = ssh
+        filter   = sshd
+        banaction = nftables-multiport
+        maxretry = 5
+        bantime  = 15m
+      '';
+    };
 
   ###################################### Docker ########################################
   virtualisation.docker = {
