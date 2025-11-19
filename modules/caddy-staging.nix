@@ -1,3 +1,5 @@
+{ config, lib, pkgs, ... }:
+
 let
   stagingDir = "/opt/impious/impious/deploy";
 in
