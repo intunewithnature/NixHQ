@@ -18,7 +18,7 @@
   # Root filesystem on /dev/vda2 (ext4)
   fileSystems."/" = {
     # Replace this with the real UUID from `lsblk -f` or `blkid /dev/vda2`
-    device = "/dev/disk/by-uuid/REPLACE-ME-WITH-REAL-UUID";
+    device = "/dev/disk/by-uuid/a52d9f01-a4e9-4a7b-b1d1-623eaea304ac";
     fsType = "ext4";
   };
 
