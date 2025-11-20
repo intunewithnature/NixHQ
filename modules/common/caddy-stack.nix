@@ -95,24 +95,27 @@ in
         DEPLOY_ENV = cfg.environment;
       };
 
-      environmentFiles = cfg.environmentFiles;
-
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-        User = cfg.user;
-        Group = cfg.group;
-        WorkingDirectory = cfg.deployDir;
-        ExecStart = "${composeBin} compose up -d --force-recreate --remove-orphans";
-        ExecReload = "${composeBin} compose up -d --force-recreate --remove-orphans";
-        ExecStop = "${composeBin} compose down";
-        Restart = "on-failure";
-        RestartSec = 10;
-        TimeoutStopSec = 300;
-        KillMode = "mixed";
-        StandardOutput = "journal";
-        StandardError = "journal";
-        UMask = "0027";
+      serviceConfig =
+        {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          User = cfg.user;
+          Group = cfg.group;
+          WorkingDirectory = cfg.deployDir;
+          ExecStart = "${composeBin} compose up -d --force-recreate --remove-orphans";
+          ExecReload = "${composeBin} compose up -d --force-recreate --remove-orphans";
+          ExecStop = "${composeBin} compose down";
+          Restart = "on-failure";
+          RestartSec = 10;
+          TimeoutStopSec = 300;
+          KillMode = "mixed";
+          StandardOutput = "journal";
+          StandardError = "journal";
+          UMask = "0027";
+        }
+        // lib.optionalAttrs (cfg.environmentFiles != [ ]) {
+          EnvironmentFile = cfg.environmentFiles;
+        };
       };
     };
   };
