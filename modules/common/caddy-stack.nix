@@ -1,11 +1,11 @@
 { config, lib, pkgs, ... }:
 
 let
-  inherit (lib) mkAfter mkEnableOption mkIf mkOption types;
+  inherit (lib) mkAfter mkEnableOption mkIf mkOption optionalAttrs types;
   cfg = config.services.impiousStack;
 
   mkRule = path: "d ${path} 0750 ${cfg.user} ${cfg.group} -";
-  managedDirs = [ cfg.deployDir ] ++ (map (dir: "${cfg.deployDir}/${dir}") cfg.staticDirs);
+  managedDirs = [ cfg.deployDir ] ++ map (dir: "${cfg.deployDir}/${dir}") cfg.staticDirs;
   composeBin = "${pkgs.docker}/bin/docker";
 in
 {
@@ -113,10 +113,9 @@ in
           StandardError = "journal";
           UMask = "0027";
         }
-        // lib.optionalAttrs (cfg.environmentFiles != [ ]) {
+        // optionalAttrs (cfg.environmentFiles != [ ]) {
           EnvironmentFile = cfg.environmentFiles;
         };
-      };
     };
   };
 }
