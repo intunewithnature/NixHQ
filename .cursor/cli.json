@@ -1,6 +1,6 @@
 {
   "permissions": {
-    "git_push": false,
-    "pr_create": false
+    "git_push": true,
+    "pr_create": true
   }
 }
