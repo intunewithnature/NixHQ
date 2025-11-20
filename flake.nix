@@ -2,14 +2,22 @@
   description = "NixHQ VPS NixOS config";
 
   inputs = {
-    # Pin to 25.05 release
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    # 25.05 pinned to the commit captured in flake.lock
+    nixpkgs.url = "github:NixOS/nixpkgs/4c8cdd5b1a630e8f72c9dd9bf582b1afb3127d2c";
+
+    sops-nix = {
+      url = "github:Mic92/sops-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, sops-nix }:
     let
       lib = nixpkgs.lib;
-      commonModules = [ ./configuration.nix ];
+      commonModules = [
+        ./configuration.nix
+        sops-nix.nixosModules.sops
+      ];
 
       hosts = {
         vps = {

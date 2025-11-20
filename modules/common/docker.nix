@@ -18,6 +18,11 @@ in
 
     daemon.settings = {
       "log-driver" = "journald";
+      "log-opts" = {
+        "mode" = "non-blocking";
+        "tag" = "{{.Name}}";
+        "max-buffer-size" = "8m";
+      };
       "live-restore" = true;
     };
   };
