@@ -1,8 +1,5 @@
 { lib, ... }:
 
-let
-  inherit (lib) mkForce;
-in
 {
   #################################### Networking #####################################
   networking.firewall = {
@@ -20,7 +17,6 @@ in
   ###################################### SSH ###########################################
   services.openssh = {
     enable = true;
-
     settings = {
       PermitEmptyPasswords = false;
       PermitRootLogin = "no";
@@ -36,8 +32,9 @@ in
       MaxSessions = 4;
       MaxStartups = "10:30:60";
       GSSAPIAuthentication = false;
+      PubkeyAuthentication = true;
     };
-
+    openFirewall = false;
     extraConfig = "AllowUsers app";
   };
 
@@ -48,7 +45,7 @@ in
     jails = {
       DEFAULT.settings = {
         backend = "systemd";
-        banaction = mkForce "nftables-multiport";
+        banaction = lib.mkForce "nftables-multiport";
         findtime = "15m";
       };
 

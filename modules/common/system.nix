@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ lib, pkgs, ... }:
 
 {
   #################################### Boot Loader ####################################
@@ -19,14 +19,18 @@
   time.timeZone = "America/Detroit";
 
   ################################### System Logs ######################################
-  services.journald.extraConfig = ''Storage=persistent'';
+  services.journald.extraConfig = lib.mkForce ''
+    Storage=persistent
+    SystemMaxUse=1G
+    SystemMaxFileSize=250M
+    RuntimeMaxUse=250M
+  '';
 
   ############################ System Packages (Global) #################################
   environment.systemPackages = with pkgs; [
     git
     nano
     htop
-    docker-compose
   ];
 
   #################################### Flake Support ###################################

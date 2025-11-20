@@ -1,17 +1,12 @@
 { ... }:
 
 {
-  imports = [
-    ../configuration.nix
-    ../hardware-vps.nix
-    ../modules/caddy-stack.nix
-  ];
-
   networking.hostName = "impious-vps";
 
-  services.caddyStack = {
+  services.impiousStack = {
     enable = true;
     environment = "production";
     composeFile = "docker-compose.yml";
+    projectName = "impious-prod";
   };
 }
