@@ -18,12 +18,17 @@ in
     };
   };
 
-  config.users.users.app = {
-    isNormalUser = true;
-    description = "App deployment user";
-    home = "/home/app";
-    shell = pkgs.bashInteractive;
-    extraGroups = [ "wheel" "docker" ];
-    openssh.authorizedKeys.keys = cfg.authorizedKeys;
+  config = {
+    users.groups.app = { };
+
+    users.users.app = {
+      isNormalUser = true;
+      description = "App deployment user";
+      home = "/home/app";
+      shell = pkgs.bashInteractive;
+      group = "app";
+      extraGroups = [ "wheel" "docker" ];
+      openssh.authorizedKeys.keys = cfg.authorizedKeys;
+    };
   };
 }

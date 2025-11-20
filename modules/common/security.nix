@@ -1,5 +1,9 @@
-{ lib, ... }:
+{ config, lib, ... }:
 
+let
+  inherit (lib) optionalAttrs;
+  stackCfg = config.services.impiousStack;
+in
 {
   #################################### Networking #####################################
   networking.firewall = {
@@ -55,6 +59,22 @@
         filter = "sshd";
         maxretry = 5;
         bantime = "15m";
+      };
+    }
+    // optionalAttrs stackCfg.enable {
+      "caddy-http".settings = {
+        enabled = true;
+        backend = "systemd";
+        journalmatch = "SYSLOG_IDENTIFIER=${stackCfg.fail2banIdentifier}";
+        maxretry = 20;
+        findtime = "10m";
+        bantime = "15m";
+        port = "http,https";
+        protocol = "tcp";
+        action = "nftables-multiport[name=caddy-http, port=\"80,443\", protocol=tcp]";
+        failregex = ''
+          <HOST> .*"(GET|POST|HEAD|PUT|DELETE|PATCH|OPTIONS) [^"]+" (40\d|41\d|42\d|43\d|44\d|50\d|51\d|52\d|53\d)
+        '';
       };
     };
   };
