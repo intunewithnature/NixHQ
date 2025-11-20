@@ -12,5 +12,6 @@
   services.caddyStack = {
     enable = true;
     environment = "staging";
+    composeFile = "docker-compose.dev.yml";
   };
 }

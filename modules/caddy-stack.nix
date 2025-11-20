@@ -92,9 +92,9 @@ in
         ];
         EnvironmentFile = cfg.environmentFiles;
 
-        ExecStart = "${pkgs.docker-compose}/bin/docker-compose up --remove-orphans";
-        ExecReload = "${pkgs.docker-compose}/bin/docker-compose up --remove-orphans";
-        ExecStop = "${pkgs.docker-compose}/bin/docker-compose down";
+        ExecStart = "${pkgs.docker-compose}/bin/docker-compose -f ${cfg.composeFile} up --remove-orphans";
+        ExecReload = "${pkgs.docker-compose}/bin/docker-compose -f ${cfg.composeFile} up --remove-orphans";
+        ExecStop = "${pkgs.docker-compose}/bin/docker-compose -f ${cfg.composeFile} down";
 
         Type = "simple";
         Restart = "on-failure";

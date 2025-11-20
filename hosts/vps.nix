@@ -12,5 +12,6 @@
   services.caddyStack = {
     enable = true;
     environment = "production";
+    composeFile = "docker-compose.yml";
   };
 }
