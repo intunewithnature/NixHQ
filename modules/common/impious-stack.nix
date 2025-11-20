@@ -47,6 +47,11 @@ let
 
   managedDirs = unique ([ deployDir ] ++ managedStaticDirs);
 
+  staticDirEnvVars =
+    listToAttrs
+      (mapAttrsToList (name: dir:
+        nameValuePair "IMPIOUS_STATIC_${toUpper name}" dir) resolvedStaticDirs);
+
   envFiles =
     [ secretEnvFile ]
     ++ map toString cfg.extraEnvFiles;
@@ -171,11 +176,6 @@ in
       description = "Optional SOPS-encrypted source file. When set, the file materializes at secretEnvFile via sops.secrets.";
     };
   };
-
-  staticDirEnvVars =
-    listToAttrs
-      (mapAttrsToList (name: dir:
-        nameValuePair "IMPIOUS_STATIC_${toUpper name}" dir) resolvedStaticDirs);
 
   config = mkIf cfg.enable {
     assertions = [
