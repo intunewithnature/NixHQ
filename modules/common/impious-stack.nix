@@ -4,13 +4,22 @@ let
   inherit (builtins) dirOf;
 
   inherit (lib)
+    concatStringsSep
+    hasPrefix
+    listToAttrs
+    mapAttrs
+    mapAttrsToList
     mkAfter
     mkEnableOption
     mkIf
     mkOption
+    nameValuePair
     optional
     optionalAttrs
-    types;
+    types
+    unique;
+
+  inherit (lib.strings) toUpper;
 
   cfg = config.services.impiousStack;
 
@@ -22,9 +31,21 @@ let
   mkRule = path: "d ${path} 0750 ${cfg.user} ${cfg.group} -";
   mkSecretRule = path: "d ${path} 0700 ${cfg.user} ${cfg.user} -";
 
-  managedDirs =
-    [ deployDir ]
-    ++ map (dir: "${deployDir}/${dir}") cfg.staticDirs;
+  resolveStaticDir = dir:
+    if hasPrefix "/" dir then dir else "${deployDir}/${dir}";
+
+  resolvedStaticDirs = mapAttrs (_: resolveStaticDir) cfg.staticDirs;
+
+  managedStaticDirs =
+    builtins.concatMap
+      (dir:
+        let
+          parent = dirOf dir;
+        in
+        if parent == dir then [ dir ] else [ dir parent ])
+      (builtins.attrValues resolvedStaticDirs);
+
+  managedDirs = unique ([ deployDir ] ++ managedStaticDirs);
 
   envFiles =
     [ secretEnvFile ]
@@ -95,14 +116,28 @@ in
     };
 
     staticDirs = mkOption {
-      type = types.listOf types.str;
-      default = [ "site" "codex" ];
-      example = [ "site" "codex" "assets" ];
+      type = types.attrsOf types.str;
+      default = {
+        site = "site";
+        codex = "codex";
+      };
+      example = {
+        site = "/opt/impious/deploy/site";
+        codex = "/opt/impious/deploy/codex/public";
+      };
       description = ''
-        Subdirectories created under deployDir for static asset bind mounts.
-        The application repository is responsible for mounting
-        /opt/impious/deploy/site -> /srv/site (impious.io) and
-        /opt/impious/deploy/codex -> /srv/codex (codex.imperiumsolis.com) within its Caddy compose file.
+        Mapping of Caddy static content targets to host directories (absolute paths or paths
+        relative to services.impiousStack.deployDir). Each attribute key becomes /srv/<name>
+        inside the docker compose project; the corresponding value is bind-mounted from the host.
+      '';
+    };
+
+    domains = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      description = ''
+        Additional FQDNs handed to Caddy. The list is exported to the compose
+        runtime as CADDY_DOMAIN_LIST (comma-separated).
       '';
     };
 
@@ -137,6 +172,11 @@ in
     };
   };
 
+  staticDirEnvVars =
+    listToAttrs
+      (mapAttrsToList (name: dir:
+        nameValuePair "IMPIOUS_STATIC_${toUpper name}" dir) resolvedStaticDirs);
+
   config = mkIf cfg.enable {
     assertions = [
       {
@@ -169,17 +209,21 @@ in
       startLimitIntervalSec = 60;
       startLimitBurst = 3;
 
-      environment =
-        {
-          COMPOSE_FILE = cfg.composeFile;
-          COMPOSE_PROJECT_NAME = cfg.projectName;
-          DEPLOY_ENV = cfg.environment;
-          CADDY_TLS_MODE = cfg.tlsMode;
-        }
-        // optionalAttrs (cfg.primaryDomain != null) {
-          CADDY_PRIMARY_DOMAIN = cfg.primaryDomain;
-        }
-        // cfg.extraEnvironment;
+        environment =
+          {
+            COMPOSE_FILE = cfg.composeFile;
+            COMPOSE_PROJECT_NAME = cfg.projectName;
+            DEPLOY_ENV = cfg.environment;
+            CADDY_TLS_MODE = cfg.tlsMode;
+          }
+          // optionalAttrs (cfg.primaryDomain != null) {
+            CADDY_PRIMARY_DOMAIN = cfg.primaryDomain;
+          }
+          // optionalAttrs (cfg.domains != [ ]) {
+            CADDY_DOMAIN_LIST = concatStringsSep "," cfg.domains;
+          }
+          // staticDirEnvVars
+          // cfg.extraEnvironment;
 
       serviceConfig =
         {
