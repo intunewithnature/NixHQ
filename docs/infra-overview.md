@@ -1,34 +1,34 @@
 ## NixHQ Infrastructure Overview
 
-This repo is the system-definition source of truth for the Impious hosts. All configuration is expressed as a NixOS flake; application code and Docker compose files live separately under `/opt/impious` on each VPS.
+This repo is the system-definition source of truth for the Impious hosts. All configuration is expressed as a NixOS flake; application code, Caddyfile, and Docker compose files live separately under `/opt/impious` on each VPS.
 
 ---
 
 ### Hosts & Roles
 
-- **Production VPS**
-  - Flake output: `.#vps`
+- **Production VPS (`.#vps`)**
   - Host module: `hosts/vps.nix`
-  - Hardware file: `hardware-vps.nix`
+  - Hardware: `hardware-vps.nix`
   - Hostname: `impious-vps`
-  - Expected app directory: `/opt/impious/deploy`
+  - Compose file: `/opt/impious/deploy/docker-compose.yml`
+  - Compose project name: `impious-prod`
 
-- **Staging / Test VPS**
-  - Flake output: `.#test-server`
+- **Staging / Test VPS (`.#test-server`)**
   - Host module: `hosts/test-server.nix`
-  - Hardware file: `hardware-test-server.nix`
+  - Hardware: `hardware-test-server.nix`
   - Hostname: `test-server`
-  - Expected app directory: `/opt/impious/deploy`
+  - Compose file: `/opt/impious/deploy/docker-compose.dev.yml`
+  - Compose project name: `impious-staging`
 
-Both hosts import the shared base stack located under `modules/`:
+Both hosts import the shared base stack located under `modules/common/`:
 
-- `base-system.nix` – boot loader, swap, timezone, journald persistence, base packages, and flake features
-- `security.nix` – firewall, SSH hardening, sudo policy, and fail2ban defaults
-- `docker-host.nix` – Docker engine tuning, auto-prune, and base `/opt/impious` directory management
+- `system.nix` – boot loader, swap file, timezone, journald persistence (1 GiB cap), base packages, flake features
+- `security.nix` – nftables firewall (22/80/443 only), SSH lockdown, sudo rules, fail2ban defaults
+- `docker.nix` – Docker engine enablement, weekly auto-prune, journald logging, `/opt/impious/deploy` directory management, and the Docker Compose v2 CLI plugin
+- `caddy-stack.nix` – `impious-stack.service` systemd unit that drives the Docker/Caddy compose project, with tmpfiles guarding `/opt/impious/deploy/{site,codex}`
 - `users/app-user.nix` – opinionated `app` deployment account (wheel + docker) with overridable SSH keys
-- `modules/caddy-stack.nix` – systemd-managed Compose stack for Caddy and supporting containers
 
-The `services.caddyStack` unit now keeps the compose project in the foreground (systemd `Type=simple`), runs as the non-root `app` user with the `docker` primary group, and will automatically recreate `/opt/impious/deploy` with 0750 permissions if it goes missing. Restarts happen automatically when the compose process exits with an error, and you can feed additional environment files via `services.caddyStack.environmentFiles`.
+The `services.impiousStack` unit wraps the compose deployment via `docker compose up -d --force-recreate`, runs as the `app` user, and exposes tunables for compose file names, environment files, and project identifiers. Systemd owns the lifecycle through `impious-stack.service`, ensuring `/opt/impious/deploy` and its static subdirectories stay owned by `app:docker`.
 
 ---
 
@@ -75,14 +75,15 @@ Adjustments to these controls must be reviewed carefully—loosening them affect
 
 - Application stack lives under `/opt/impious`
 - Docker Compose project (including the Caddy reverse proxy) is located at `/opt/impious/deploy`
-- The `caddy-stack` systemd unit runs `docker-compose up --remove-orphans` in the foreground, so systemd can restart it automatically if any container chain exits unexpectedly
-- The module will recreate `/opt/impious/deploy` with `app:docker` ownership if it disappears, but operators are responsible for providing the compose files and secret `.env` files
+- Two static asset directories are managed by tmpfiles: `/opt/impious/deploy/site` (impious.io) and `/opt/impious/deploy/codex` (codex.imperiumsolis.com). The application repo must mount them into the Caddy container as `/srv/site` and `/srv/codex`, respectively, and supply the accompanying Caddyfile blocks.
+- The `impious-stack` systemd unit runs `docker compose up -d --force-recreate --remove-orphans`, restarts on failures, and tears everything down via `docker compose down` when stopped.
+- The module will recreate `/opt/impious/deploy` with `app:docker` ownership if it disappears, but operators are responsible for providing the compose files, built static assets, and secret `.env` files.
 
 ---
 
 ### CI Guarantees
 
-- `.github/workflows/flake-check.yml` runs `nix flake check` on pushes and pull requests to `main`/`master`
+- `.github/workflows/flake-check.yml` installs Nix, runs `nix flake check --print-build-logs`, and builds both host system closures (`nix build .#nixosConfigurations.test-server.config.system.build.toplevel` and `.#nixosConfigurations.vps.config.system.build.toplevel`) on pushes/PRs targeting `main`/`master`
 - `.github/workflows/cursor-code-review.yml` is enabled for PR reviews (move secrets into the repo settings before relying on it)
 - Use this to validate configuration changes before deploying
 
@@ -91,12 +92,12 @@ Adjustments to these controls must be reviewed carefully—loosening them affect
 ### Operator Cheat Sheet
 
 - **Deploy new configuration**
-  - Production: `sudo nixos-rebuild switch --flake /etc/nixos#vps`
-  - Staging: `sudo nixos-rebuild switch --flake /etc/nixos#test-server`
+  - Staging first: `sudo nixos-rebuild switch --flake /etc/nixos#test-server`
+  - Production next: `sudo nixos-rebuild switch --flake /etc/nixos#vps`
 
 - **Investigate services**
-  - Caddy/Docker stack: `systemctl status caddy-stack` (defined in `modules/caddy-stack.nix`)
-  - Firewall rules: inspect `modules/security.nix` and confirm with `sudo nft list ruleset`
-  - SSH access: `modules/security.nix`; override `deploy.appUser.authorizedKeys` per-host
+  - Caddy/Docker stack: `systemctl status impious-stack` (defined in `modules/common/caddy-stack.nix`)
+  - Firewall rules: inspect `modules/common/security.nix` and confirm with `sudo nft list ruleset`
+  - SSH access: `modules/common/security.nix`; override `deploy.appUser.authorizedKeys` per-host
 
 Keep this document in sync when adding new hosts, services, or security controls.

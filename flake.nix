@@ -6,17 +6,29 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
   };
 
-  outputs = { self, nixpkgs }: {
-    nixosConfigurations = {
-        vps = nixpkgs.lib.nixosSystem {
-          system = "x86_64-linux";
-          modules = [ ./hosts/vps.nix ];
-        };
+  outputs = { self, nixpkgs }:
+    let
+      lib = nixpkgs.lib;
+      commonModules = [ ./configuration.nix ];
 
-        test-server = nixpkgs.lib.nixosSystem {
-          system = "x86_64-linux";
-          modules = [ ./hosts/test-server.nix ];
+      hosts = {
+        vps = {
+          hardware = ./hardware-vps.nix;
+          role = ./hosts/vps.nix;
         };
+        test-server = {
+          hardware = ./hardware-test-server.nix;
+          role = ./hosts/test-server.nix;
+        };
+      };
+    in {
+      nixosConfigurations =
+        lib.mapAttrs
+          (_: host:
+            lib.nixosSystem {
+              system = "x86_64-linux";
+              modules = commonModules ++ [ host.hardware host.role ];
+            })
+          hosts;
     };
-  };
 }

@@ -27,3 +27,9 @@ jobs:
 
       - name: Run nix flake check
         run: nix flake check --print-build-logs
+
+      - name: Build staging system
+        run: nix build .#nixosConfigurations.test-server.config.system.build.toplevel --print-build-logs
+
+      - name: Build production system
+        run: nix build .#nixosConfigurations.vps.config.system.build.toplevel --print-build-logs
