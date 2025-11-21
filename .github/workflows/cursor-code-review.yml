@@ -26,12 +26,6 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install cursor-agent CLI
-        run: |
-          npm install -g cursor-agent@latest
-          echo "$(npm config get prefix)/bin" >> $GITHUB_PATH
-          cursor-agent --version
-
       - name: Configure Git identity
         run: |
           git config user.name "Cursor Agent"
@@ -42,7 +36,7 @@ jobs:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cursor-agent review \
+          npx --yes cursor-agent@latest review \
             --github-token="$GITHUB_TOKEN" \
             --repo="${{ github.repository }}" \
             --pr="${{ github.event.number }}" \
