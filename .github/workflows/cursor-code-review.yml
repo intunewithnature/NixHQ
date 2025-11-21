@@ -27,7 +27,10 @@ jobs:
           node-version: "20"
 
       - name: Install cursor-agent CLI
-        run: npm install -g cursor-agent
+        run: |
+          npm install -g cursor-agent@latest
+          echo "$(npm config get prefix)/bin" >> $GITHUB_PATH
+          cursor-agent --version
 
       - name: Configure Git identity
         run: |
