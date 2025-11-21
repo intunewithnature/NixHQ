@@ -21,10 +21,13 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Install Cursor CLI
-        run: |
-          curl -fsSL https://cursor.sh/install.sh | bash
-          echo "$HOME/.cursor/bin" >> $GITHUB_PATH
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install cursor-agent CLI
+        run: npm install -g cursor-agent
 
       - name: Configure Git identity
         run: |
