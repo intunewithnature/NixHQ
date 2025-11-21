@@ -1,39 +1,30 @@
 ## Infra Reality — Hardened Stack
 
 ### Hosts at a glance
-- `.#vps` → `hosts/vps.nix` (production): `docker-compose.yml`, TLS enabled, domain `impious.io`, fail2ban identifier `impious-prod-caddy`.
-- `.#test-server` → `hosts/test-server.nix` (staging): `docker-compose.dev.yml`, TLS disabled, fake domain `staging.impious.invalid`, extra env `CADDY_STAGING_NOTE`, fail2ban identifier `impious-staging-caddy`.
-- Both share hardware profiles (`hardware-*.nix`) and the base module list from `configuration.nix`.
+- `.#vps` → `hosts/vps.nix` (production): `docker-compose.yml`, TLS enabled, `primaryDomain = "impious.io"`, fail2ban identifier `impious-prod-caddy`.
+- `.#test-server` → `hosts/test-server.nix` (staging): `docker-compose.dev.yml`, TLS disabled, fake `.test` domains, `staticDirs` for `site` and `codex`, extra env `CADDY_STAGING_NOTE`, fail2ban identifier `impious-staging-caddy`.
+- Both share hardware profiles (`hardware-*.nix`) and the common module set from `configuration.nix`.
 
 ### Typed impious stack module
-`modules/common/impious-stack.nix` defines `services.impiousStack` with:
-- Path-typed `deployDir` (`/opt/impious/deploy`) and tmpfiles to guard static dirs.
-- User/group toggles (defaults `app:docker`) and capability sandboxing (`CAP_NET_BIND_SERVICE`, `NoNewPrivileges`, `RestrictAddressFamilies`).
-- Host overrides for `composeFile`, `projectName`, `tlsMode`, `primaryDomain`, `extraEnvironment`, and journald `fail2banIdentifier`.
-- Secrets contract: `secretEnvFile`, optional `secretSopsFile`, `manageSecretFile`, `extraEnvFiles`.
-- Systemd oneshot unit that waits for Docker/network, runs `docker compose up -d --force-recreate --remove-orphans`, keeps env vars in sync, and tears down via `docker compose down`.
+`modules/common/impious-stack.nix` introduces `services.impiousStack`:
+- Enforces `deployDir`, typed TLS/domain/project settings, and appends host overrides (`composeFile`, `projectName`, `tlsMode`, `primaryDomain`, `domains`, `extraEnvironment`, `staticDirs`, `fail2banIdentifier`).
+- Creates tmpfiles entries for `/opt/impious/deploy`, every declared static directory, and the secrets directory (owned by `app:docker` by default).
+- Ones-shot `systemd` unit runs `docker compose up -d --force-recreate --remove-orphans`/`down`, waits for Docker + network, pins `SyslogIdentifier` to the fail2ban tag, and runs with `CAP_NET_BIND_SERVICE`, `ProtectSystem=strict`, `NoNewPrivileges`.
+- Secrets contract: `secretEnvFile`, `secretSopsFile`, `manageSecretFile`, `extraEnvFiles`. If `secretSopsFile` is set the `sops-nix` module renders the decrypted dotenv at deploy time.
 
 ### Docker substrate
 `modules/common/docker.nix`:
-- Enables Docker + weekly `docker system prune --all --volumes`.
-- Forces journald logging with bounded buffers (`mode=non-blocking`, `max-buffer-size=8m`, tag=`{{.Name}}`) and `live-restore` to survive daemon restarts.
-- Creates `/opt/impious` roots owned by `app:docker` and installs compose CLI plugin system-wide.
+- Enables Docker with weekly `autoPrune` (`--all --volumes`) to keep disk pressure low.
+- Forces journald logging (`mode=non-blocking`, `max-buffer-size=8m`, tag = `{{.Name}}`) plus `live-restore` for daemon restarts.
+- Ensures `/opt/impious` exists and stays owned by `app:docker`.
 
 ### Security posture
-- Firewall: nftables, allow TCP 22/80/443 only, log refused packets.
-- SSH: `PermitRootLogin no`, key-only auth, forwarding disabled, `AllowUsers app`, aggressive timeouts.
+- Firewall: nftables with TCP 22/80/443, UDP 443 defaults, refused packets logged.
+- SSH: `PermitRootLogin no`, key-only auth, forwarding disabled, `AllowUsers app`, keep-alive limits to kill idle tunnels.
 - Fail2ban:
-  - Default sshd jail (5 strikes / 15 minutes).
-  - `caddy-http` jail (journald backend) keyed off `services.impiousStack.fail2banIdentifier`, banning abusive HTTP clients on ports 80/443.
-- `app` user:
-  ```nix
-  users.users.app = {
-    group = "app";
-    extraGroups = [ "wheel" "docker" ];
-  };
-  users.groups.app = {};
-  ```
-  Ensures secret files (`0600`) stay readable by the service owner only.
+  - Default sshd jail (systemd backend, nftables multiport banaction).
+  - Optional `caddy-http` jail keyed off `services.impiousStack.fail2banIdentifier` watching journald HTTP errors.
+- `app` user lives in its own group, belongs to `wheel` + `docker`, and owns every secret path.
 
 ### Secrets + docs
 - `.env.example` and `docs/secrets.md` describe every key and the SOPS workflow.

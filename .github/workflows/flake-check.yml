@@ -24,7 +24,7 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v27
         with:
-          nix_path: nixpkgs=github:NixOS/nixpkgs/4c8cdd5b1a630e8f72c9dd9bf582b1afb3127d2c
+          nix_path: nixpkgs=github:NixOS/nixpkgs/c58bc7f5459328e4afac201c5c4feb7c818d604b
 
       - name: Verify locked inputs
         run: nix flake metadata

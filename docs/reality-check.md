@@ -1,9 +1,18 @@
-## Reality Check — 2025-11-20
+## Reality Check — 2025-11-21
 
 ### Hosts + Imports
-- `flake.nix` maps two systems that all reuse the shared module stack in `configuration.nix`.
+- `flake.nix` maps `.#vps` and `.#test-server` to their hardware + role modules and feeds the shared imports via `configuration.nix`.
 
-```14:34:flake.nix
+```4:37:flake.nix
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    sops-nix.url = "github:Mic92/sops-nix";
+  };
+
+  outputs = inputs@{ nixpkgs, ... }:
+    let
+      inherit (nixpkgs) lib;
+      system = "x86_64-linux";
       hosts = {
         vps = {
           hardware = ./hardware-vps.nix;
@@ -19,84 +28,117 @@
         lib.mapAttrs
           (_: host:
             lib.nixosSystem {
-              system = "x86_64-linux";
-              modules = commonModules ++ [ host.hardware host.role ];
+              inherit system;
+              modules = [
+                ./configuration.nix
+                host.hardware
+                host.role
+              ];
+              specialArgs = { inherit inputs; };
             })
           hosts;
+    };
 ```
 
-- `configuration.nix` imports `modules/common/{system,security,docker,impious-stack}.nix` plus `modules/users/app-user.nix`.
+### Common Module Stack
+- `configuration.nix` imports `sops-nix` plus the shared system, security, docker, impious-stack, and `app` user modules.
 
-```4:11:configuration.nix
+```1:15:configuration.nix
+{ inputs, ... }:
+
 {
   imports = [
+    inputs.sops-nix.nixosModules.sops
     ./modules/common/system.nix
     ./modules/common/security.nix
     ./modules/common/docker.nix
     ./modules/common/impious-stack.nix
     ./modules/users/app-user.nix
   ];
+
+  system.stateVersion = "25.05";
 }
 ```
 
 ### Impious Stack Wiring
-- Module `modules/common/impious-stack.nix` defines typed options for `deployDir` (`types.path`), `composeFile`, TLS mode, journald fail2ban identifiers, and SOPS-backed secret/env file handling.
-- Systemd service now runs with `CAP_NET_BIND_SERVICE`, `NoNewPrivileges`, and injects both secret + extra env files plus host-specific domains.
+- `modules/common/impious-stack.nix` defines typed options for the deployment directory, compose file, TLS mode, domains, static asset directories, secrets contract, and fail2ban identifier, then builds the hardening for `systemd.services.impious-stack`.
 
-```33:215:modules/common/impious-stack.nix
+```36:210:modules/common/impious-stack.nix
   options.services.impiousStack = {
-    deployDir = mkOption {
-      type = types.path;
-      default = "/opt/impious/deploy";
-    };
-    tlsMode = mkOption { type = types.enum [ "enabled" "disabled" ]; };
+    enable = mkOption { type = types.bool; default = false; };
+    deployDir = mkOption { type = types.str; default = "/opt/impious/deploy"; };
+    composeFile = mkOption { type = types.str; default = "docker-compose.yml"; };
+    tlsMode = mkOption { type = types.enum [ "enabled" "disabled" ]; default = "enabled"; };
+    primaryDomain = mkOption { type = types.str; default = "impious.io"; };
+    domains = mkOption { type = types.listOf types.str; default = [ ]; };
+    staticDirs = mkOption { type = types.attrsOf types.str; default = { }; };
+    secretEnvFile = mkOption { type = types.str; default = "/var/lib/impious-stack/secrets/stack.env"; };
+    secretSopsFile = mkOption { type = types.nullOr types.path; default = null; };
+    manageSecretFile = mkOption { type = types.bool; default = true; };
+    extraEnvFiles = mkOption { type = types.listOf types.str; default = [ ]; };
     fail2banIdentifier = mkOption { type = types.str; default = "impious-caddy"; };
-    secretEnvFile = mkOption {
-      type = types.path;
-      default = "/var/lib/impious-stack/secrets/stack.env";
-    };
-    secretSopsFile = mkOption {
-      type = types.nullOr types.path;
-      default = null;
-    };
-    extraEnvFiles = mkOption { type = types.listOf types.path; default = [ ]; };
   };
 
   systemd.services.impious-stack = {
+    wantedBy = [ "multi-user.target" ];
     after = [ "network-online.target" "docker.service" ];
+    requires = [ "network-online.target" "docker.service" ];
+    unitConfig.ConditionPathExists = cfg.deployDir;
     environment = {
       COMPOSE_FILE = cfg.composeFile;
+      COMPOSE_PROJECT_NAME = cfg.projectName;
+      IMPIOUS_ENVIRONMENT = cfg.environment;
+      CADDY_PRIMARY_DOMAIN = cfg.primaryDomain;
+      CADDY_DOMAINS = concatStringsSep "," cfg.domains;
       CADDY_TLS_MODE = cfg.tlsMode;
-    } // cfg.extraEnvironment;
+    } // staticEnv // cfg.extraEnvironment;
+    environmentFiles = [ cfg.secretEnvFile ] ++ cfg.extraEnvFiles;
     serviceConfig = {
-      User = cfg.user;
-      WorkingDirectory = deployDir;
-      ExecStart = "${composeBin} compose up -d --force-recreate --remove-orphans";
+      Type = "oneshot";
+      ExecStart = "${composeBin} compose --project-name ${cfg.projectName} --file ${cfg.composeFile} up -d --force-recreate --remove-orphans";
+      ExecStop = "${composeBin} compose --project-name ${cfg.projectName} --file ${cfg.composeFile} down";
       AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];
-      NoNewPrivileges = true;
-    } // optionalAttrs (envFiles != [ ]) {
-      EnvironmentFile = envFiles;
+      CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ];
+      ProtectSystem = "strict";
+      SyslogIdentifier = cfg.fail2banIdentifier;
     };
+  };
+
+  sops.secrets.impious-stack-env = {
+    sopsFile = cfg.secretSopsFile;
+    path = cfg.secretEnvFile;
+    owner = cfg.user;
+    group = cfg.group;
+    mode = "0600";
+    format = "dotenv";
   };
 ```
 
 ### Security Surface
-- Firewall locked to TCP 22/80/443 and logs refusals.
-- SSH enforces key-only auth, bans root login, disables forwarding, and restricts to the `app` user.
-- Fail2ban stacks the sshd jail with a journald-powered `caddy-http` jail keyed off whatever identifier `services.impiousStack.fail2banIdentifier` publishes (`impious-prod-caddy` or `impious-staging-caddy`).
+- Firewall, SSH, sudo, and fail2ban hardening lives in `modules/common/security.nix`.
 
-```5:84:modules/common/security.nix
+```10:70:modules/common/security.nix
+  security.sudo.enable = true;
+
   networking.firewall = {
     enable = true;
     allowedTCPPorts = [ 22 80 443 ];
+    allowedUDPPorts = lib.mkDefault [ 443 ];
     logRefusedConnections = true;
   };
 
   services.openssh = {
     enable = true;
+    openFirewall = false;
     settings = {
+      PermitEmptyPasswords = "no";
       PermitRootLogin = "no";
       PasswordAuthentication = false;
+      KbdInteractiveAuthentication = false;
+      AllowTcpForwarding = "no";
+      X11Forwarding = "no";
+      ClientAliveInterval = 300;
+      ClientAliveCountMax = 2;
       AllowUsers = "app";
     };
     extraConfig = "AllowUsers app";
@@ -104,19 +146,22 @@
 
   services.fail2ban = {
     enable = true;
+    package = pkgs.fail2ban;
     jails = {
       DEFAULT.settings = {
         backend = "systemd";
         banaction = lib.mkForce "nftables-multiport";
         findtime = "15m";
+        bantime = "1h";
+        maxretry = 5;
       };
       sshd.settings = {
         enabled = true;
         port = "ssh";
-        maxretry = 5;
+        logpath = "/var/log/auth.log";
       };
     }
-    // optionalAttrs stackCfg.enable {
+    // lib.optionalAttrs stackCfg.enable {
       "caddy-http".settings = {
         enabled = true;
         backend = "systemd";
@@ -129,16 +174,16 @@
   };
 ```
 
+### Docker + Base System
+- `modules/common/docker.nix` enables Docker with journald logging and weekly prune jobs; `modules/common/system.nix` keeps the boot loader, swapfile, timezone, journald persistence, and base packages consistent; `modules/users/app-user.nix` defines the `app` deploy user with SSH keys.
+
 ### Pinning Status
-- `flake.nix` and `flake.lock` both pin `nixpkgs` to commit `4c8cdd5b1a630e8f72c9dd9bf582b1afb3127d2c`; `sops-nix` is locked at `877bb495a6f8faf0d89fc10bd142c4b7ed2bcc0b`.
-- `README.md` now documents the `nix --extra-experimental-features 'nix-command flakes' flake update nixpkgs` dance so reviewers know how the pin moved.
+- `flake.lock` pins `nixpkgs` (25.05) at `c58bc7f5459328e4afac201c5c4feb7c818d604b` and `sops-nix` at `877bb495a6f8faf0d89fc10bd142c4b7ed2bcc0b`. Always inspect the lock alongside `flake.nix` for drift.
 
 ### CI / CD
-- `Flake CI` workflow now runs on `main`, `master`, and `dev`, installs a pinned Nix (`nixpkgs=github:NixOS/nixpkgs/4c8cdd...`), prints flake metadata, then runs `nix flake check` plus both host builds with `NIX_CONFIG: experimental-features = nix-command flakes`.
-- `deploy-stub` workflow is `workflow_dispatch`-only with `if: ${{ false }}`; it documents the commands and secrets required to automate once SSH creds exist.
-- Cursor code-review workflow still exists but requires its API key.
+- `Flake CI` runs on pushes/PRs to `main`, `master`, `dev`, installs a pinned Nix, runs `nix flake check`, and builds both host closures. `deploy-stub` remains disabled (`if: ${{ false }}`) until secrets land; `cursor-code-review` integrates Cursor once the API key is added.
 
-```1:38:.github/workflows/flake-check.yml
+```1:40:.github/workflows/flake-check.yml
 name: Flake CI
 on:
   push:
@@ -163,7 +208,7 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v27
         with:
-          nix_path: nixpkgs=github:NixOS/nixpkgs/4c8cdd5b1a630e8f72c9dd9bf582b1afb3127d2c
+          nix_path: nixpkgs=github:NixOS/nixpkgs/c58bc7f5459328e4afac201c5c4feb7c818d604b
       - name: Verify locked inputs
         run: nix flake metadata
       - name: Run nix flake check
@@ -175,7 +220,7 @@ jobs:
 ```
 
 ### Smells & Drift Risks
-- Upstream GitHub branch `dev` still returns HTTP 404, so the CI triggers for `dev` are future-proofing only—no way to audit parity with `main` yet.
-- The deploy workflow is intentionally disabled until SSH + SOPS secrets land in repo settings; manual `nixos-rebuild` is still required.
-- Compose/Caddy logs must adopt the `services.impiousStack.fail2banIdentifier` journald tag (via Docker logging options) or the HTTP jail will never fire.
-- Actual encrypted dotenv files are not included; operators must supply `secretSopsFile` per host to make the secrets contract real.
+- No encrypted dotenvs are committed; operators must set `services.impiousStack.secretSopsFile` per host to actually provision secrets.
+- Docker Compose still relies on the source repo to emit journald logs tagged with `fail2banIdentifier`; if the compose file omits that logging config the HTTP jail never triggers.
+- GitHub CI references a hard-coded `nixpkgs` commit; keep it in sync with `flake.lock` when the pin changes.
+- `deploy-stub` is intentionally disabled until SSH keys and secrets are wired in, so deployments stay manual for now.

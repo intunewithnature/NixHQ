@@ -1,0 +1,1084 @@
+diff --git a/.github/workflows/deploy-stub.yml b/.github/workflows/deploy-stub.yml
+index a1e8205..2a4cb1a 100644
+--- a/.github/workflows/deploy-stub.yml
++++ b/.github/workflows/deploy-stub.yml
+@@ -12,15 +12,12 @@ jobs:
+         run: |
+           echo "This workflow is intentionally disabled."
+           echo "Set NIX_SSH_PRIVATE_KEY and target host secrets, then flip the job condition."
+-
+       - name: Checkout repository
+         uses: actions/checkout@v4
+-
+       - name: Install Nix
+         uses: cachix/install-nix-action@v27
+         with:
+-          nix_path: nixpkgs=github:NixOS/nixpkgs/4c8cdd5b1a630e8f72c9dd9bf582b1afb3127d2c
+-
++          nix_path: nixpkgs=github:NixOS/nixpkgs/c58bc7f5459328e4afac201c5c4feb7c818d604b
+       - name: Placeholder deploy commands
+         run: |
+           echo "Example:"
+diff --git a/.github/workflows/flake-check.yml b/.github/workflows/flake-check.yml
+index fedfc82..7ae25d1 100644
+--- a/.github/workflows/flake-check.yml
++++ b/.github/workflows/flake-check.yml
+@@ -24,7 +24,7 @@ jobs:
+       - name: Install Nix
+         uses: cachix/install-nix-action@v27
+         with:
+-          nix_path: nixpkgs=github:NixOS/nixpkgs/4c8cdd5b1a630e8f72c9dd9bf582b1afb3127d2c
++          nix_path: nixpkgs=github:NixOS/nixpkgs/c58bc7f5459328e4afac201c5c4feb7c818d604b
+ 
+       - name: Verify locked inputs
+         run: nix flake metadata
+diff --git a/README.md b/README.md
+index c51000f..edbff1d 100644
+--- a/README.md
++++ b/README.md
+@@ -1,29 +1,40 @@
+ # NixHQ Fortress
+ 
+-NixHQ is the single source of truth for the Impious VPS fleet. Each host is expressed as a flake target (`.#vps`, `.#test-server`) composed from the common modules under `modules/`.
++NixHQ is the single source of truth for the Impious VPS fleet. Each flake target
++(`.#vps`, `.#test-server`) pulls in the same hardened base modules and then
++layers host-specific overrides.
+ 
+ ## Layout
+-- `flake.nix` – pins `nixpkgs` + `sops-nix`, exports NixOS configs for every host.
+-- `configuration.nix` – shared imports (`system`, `security`, `docker`, `impious-stack`, `app-user`).
+-- `modules/common/` – hardening, Docker engine tuning, the typed `services.impiousStack` module.
+-- `modules/users/app-user.nix` – locked-down deploy user (`app`).
+-- `hosts/*.nix` – host-specific toggles (compose file, TLS mode, domains, fail2ban identifiers).
++- `flake.nix` – pins `nixpkgs` 25.05 + `sops-nix`, iterates the host map, and passes shared modules.
++- `flake.lock` – records the exact commits for every input.
++- `configuration.nix` – imports the hardened module stack plus the `sops-nix` module.
++- `modules/common/` – `system.nix`, `security.nix`, `docker.nix`, and the typed `services.impiousStack` module.
++- `modules/users/app-user.nix` – defines the locked-down deploy user (`app`).
++- `hosts/*.nix` – host toggles (compose file, TLS mode, domains, fail2ban identifier, staging env vars).
++- `hardware-*.nix` – generated hardware profiles per VPS.
+ - `docs/` – recon, secrets runbook, deploy playbook, infra reality report.
+-- `.github/workflows/` – flake CI + a disabled CD stub for when secrets arrive.
++- `.github/workflows/` – flake CI, Cursor review automation, and a gated deploy stub.
+ 
+ ## Pinning & Updates
+-`nixpkgs` is commit-pinned (`4c8cdd5b1a630e8f72c9dd9bf582b1afb3127d2c`). To bump it (or any other input):
++Run the standard dance whenever you need a new upstream commit:
+ 
+ ```bash
+-. ~/.nix-profile/etc/profile.d/nix.sh   # if Nix is not already on PATH
+-nix --extra-experimental-features 'nix-command flakes' flake update nixpkgs
+-nix flake metadata                      # verify the lock diff
++. ~/.nix-profile/etc/profile.d/nix.sh   # if nix not on PATH
++nix --extra-experimental-features 'nix-command flakes' flake update
++nix flake metadata                      # confirm the new revisions
+ ```
+ 
+-Always include the resulting `flake.lock` diff in PRs. Document the new commit in your change summary to prove drift control.
++Always include the `flake.lock` diff in PRs and highlight the commit hashes in
++your change summary to prove drift control.
+ 
+ ## Operate
+-Follow `docs/deploy-playbook.md` for staging-first rebuilds and host verification commands. Recon and architecture notes live in `docs/infra-reality.md`, while the raw baseline dump sits in `docs/reality-check.md`.
++Follow `docs/deploy-playbook.md` for staging-first rebuilds and host
++verification commands. Recon and architecture notes live in
++`docs/infra-reality.md`, while the raw baseline dump sits in
++`docs/reality-check.md`.
+ 
+ ## Secrets
+-Secrets never ride in git. Model required keys in `.env.example`, encrypt the live values with SOPS, and point `services.impiousStack.secretSopsFile` at the encrypted payload. The module fans the decrypted file in with `0600` perms and feeds it into `EnvironmentFile=`. Full details: `docs/secrets.md`.
++Secrets never ride in git. Model required keys in `.env.example`, encrypt the
++live values with SOPS, and point `services.impiousStack.secretSopsFile` at the
++encrypted payload. The module fans the decrypted file in with `0600` perms and
++feeds it into `EnvironmentFile=`. Full details: `docs/secrets.md`.
+diff --git a/configuration.nix b/configuration.nix
+index d4105b5..e7ff87d 100644
+--- a/configuration.nix
++++ b/configuration.nix
+@@ -1,80 +1,15 @@
+-{ config, lib, pkgs, ... }:
++{ inputs, ... }:
+ 
+ {
+-  #################################### Boot Loader ####################################
+-  boot.loader.grub.enable = true;
+-  boot.loader.grub.device = "/dev/vda";
+-
+-  #################################### Networking #####################################
+-  networking.firewall = {
+-    enable = true;
+-    allowedTCPPorts = [ 22 80 443 ];
+-  };
+-
+-  ###################################### Swap #########################################
+-  # Shared choice: 2G swapfile on both hosts
+-  swapDevices = [
+-    { device = "/swapfile"; size = 2048; }
++  imports = [
++    inputs.sops-nix.nixosModules.sops
++    ./modules/common/system.nix
++    ./modules/common/security.nix
++    ./modules/common/docker.nix
++    ./modules/common/impious-stack.nix
++    ./modules/users/app-user.nix
+   ];
+ 
+-  ###################################### Timezone ######################################
+-  time.timeZone = "America/Detroit";
+-
+-  ################################### System Logs ######################################
+-  services.journald.extraConfig = ''Storage=persistent'';
+-
+-  #################################### Users ###########################################
+-  users.users.app = {
+-    isNormalUser = true;
+-    description = "App deployment user";
+-    home = "/home/app";
+-    shell = pkgs.bashInteractive;
+-    extraGroups = [ "wheel" "docker" ];
+-
+-    openssh.authorizedKeys.keys = [
+-      # same key you had before – replace if needed
+-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIACt+4DDr57ov4803wmOWqw3umfSFPjTMHUTNNNvr0By eddsa-key-20251115"
+-    ];
+-  };
+-
+-  ###################################### Sudo ##########################################
+-  security.sudo.enable = true;
+-
+-  ###################################### SSH ###########################################
+-  services.openssh = {
+-    enable = true;
+-
+-    settings = {
+-      PermitEmptyPasswords = "no";
+-      PermitRootLogin = "no";
+-      PasswordAuthentication = false;
+-      KbdInteractiveAuthentication = false;
+-    };
+-
+-    # Only allow app over SSH
+-    extraConfig = "AllowUsers app";
+-  };
+-
+-  #################################### Security ########################################
+-  services.fail2ban.enable = true;
+-
+-  ###################################### Docker ########################################
+-  virtualisation.docker = {
+-    enable = true;
+-    autoPrune.enable = true;
+-  };
+-
+-  ############################ System Packages (Global) #################################
+-  environment.systemPackages = with pkgs; [
+-    git
+-    nano
+-    htop
+-    docker-compose
+-  ];
+-
+-  #################################### Flake Support ###################################
+-  nix.settings.experimental-features = [ "nix-command" "flakes" ];
+-
+   ################################ System State Version ################################
+   system.stateVersion = "25.05";
+ }
+diff --git a/docs/infra-reality.md b/docs/infra-reality.md
+index 9af2f2e..8859f0b 100644
+--- a/docs/infra-reality.md
++++ b/docs/infra-reality.md
+@@ -1,39 +1,30 @@
+ ## Infra Reality — Hardened Stack
+ 
+ ### Hosts at a glance
+-- `.#vps` → `hosts/vps.nix` (production): `docker-compose.yml`, TLS enabled, domain `impious.io`, fail2ban identifier `impious-prod-caddy`.
+-- `.#test-server` → `hosts/test-server.nix` (staging): `docker-compose.dev.yml`, TLS disabled, fake domain `staging.impious.invalid`, extra env `CADDY_STAGING_NOTE`, fail2ban identifier `impious-staging-caddy`.
+-- Both share hardware profiles (`hardware-*.nix`) and the base module list from `configuration.nix`.
++- `.#vps` → `hosts/vps.nix` (production): `docker-compose.yml`, TLS enabled, `primaryDomain = "impious.io"`, fail2ban identifier `impious-prod-caddy`.
++- `.#test-server` → `hosts/test-server.nix` (staging): `docker-compose.dev.yml`, TLS disabled, fake `.test` domains, `staticDirs` for `site` and `codex`, extra env `CADDY_STAGING_NOTE`, fail2ban identifier `impious-staging-caddy`.
++- Both share hardware profiles (`hardware-*.nix`) and the common module set from `configuration.nix`.
+ 
+ ### Typed impious stack module
+-`modules/common/impious-stack.nix` defines `services.impiousStack` with:
+-- Path-typed `deployDir` (`/opt/impious/deploy`) and tmpfiles to guard static dirs.
+-- User/group toggles (defaults `app:docker`) and capability sandboxing (`CAP_NET_BIND_SERVICE`, `NoNewPrivileges`, `RestrictAddressFamilies`).
+-- Host overrides for `composeFile`, `projectName`, `tlsMode`, `primaryDomain`, `extraEnvironment`, and journald `fail2banIdentifier`.
+-- Secrets contract: `secretEnvFile`, optional `secretSopsFile`, `manageSecretFile`, `extraEnvFiles`.
+-- Systemd oneshot unit that waits for Docker/network, runs `docker compose up -d --force-recreate --remove-orphans`, keeps env vars in sync, and tears down via `docker compose down`.
++`modules/common/impious-stack.nix` introduces `services.impiousStack`:
++- Enforces `deployDir`, typed TLS/domain/project settings, and appends host overrides (`composeFile`, `projectName`, `tlsMode`, `primaryDomain`, `domains`, `extraEnvironment`, `staticDirs`, `fail2banIdentifier`).
++- Creates tmpfiles entries for `/opt/impious/deploy`, every declared static directory, and the secrets directory (owned by `app:docker` by default).
++- Ones-shot `systemd` unit runs `docker compose up -d --force-recreate --remove-orphans`/`down`, waits for Docker + network, pins `SyslogIdentifier` to the fail2ban tag, and runs with `CAP_NET_BIND_SERVICE`, `ProtectSystem=strict`, `NoNewPrivileges`.
++- Secrets contract: `secretEnvFile`, `secretSopsFile`, `manageSecretFile`, `extraEnvFiles`. If `secretSopsFile` is set the `sops-nix` module renders the decrypted dotenv at deploy time.
+ 
+ ### Docker substrate
+ `modules/common/docker.nix`:
+-- Enables Docker + weekly `docker system prune --all --volumes`.
+-- Forces journald logging with bounded buffers (`mode=non-blocking`, `max-buffer-size=8m`, tag=`{{.Name}}`) and `live-restore` to survive daemon restarts.
+-- Creates `/opt/impious` roots owned by `app:docker` and installs compose CLI plugin system-wide.
++- Enables Docker with weekly `autoPrune` (`--all --volumes`) to keep disk pressure low.
++- Forces journald logging (`mode=non-blocking`, `max-buffer-size=8m`, tag = `{{.Name}}`) plus `live-restore` for daemon restarts.
++- Ensures `/opt/impious` exists and stays owned by `app:docker`.
+ 
+ ### Security posture
+-- Firewall: nftables, allow TCP 22/80/443 only, log refused packets.
+-- SSH: `PermitRootLogin no`, key-only auth, forwarding disabled, `AllowUsers app`, aggressive timeouts.
++- Firewall: nftables with TCP 22/80/443, UDP 443 defaults, refused packets logged.
++- SSH: `PermitRootLogin no`, key-only auth, forwarding disabled, `AllowUsers app`, keep-alive limits to kill idle tunnels.
+ - Fail2ban:
+-  - Default sshd jail (5 strikes / 15 minutes).
+-  - `caddy-http` jail (journald backend) keyed off `services.impiousStack.fail2banIdentifier`, banning abusive HTTP clients on ports 80/443.
+-- `app` user:
+-  ```nix
+-  users.users.app = {
+-    group = "app";
+-    extraGroups = [ "wheel" "docker" ];
+-  };
+-  users.groups.app = {};
+-  ```
+-  Ensures secret files (`0600`) stay readable by the service owner only.
++  - Default sshd jail (systemd backend, nftables multiport banaction).
++  - Optional `caddy-http` jail keyed off `services.impiousStack.fail2banIdentifier` watching journald HTTP errors.
++- `app` user lives in its own group, belongs to `wheel` + `docker`, and owns every secret path.
+ 
+ ### Secrets + docs
+ - `.env.example` and `docs/secrets.md` describe every key and the SOPS workflow.
+diff --git a/docs/reality-check.md b/docs/reality-check.md
+index d439aae..b4b5c23 100644
+--- a/docs/reality-check.md
++++ b/docs/reality-check.md
+@@ -1,9 +1,18 @@
+-## Reality Check — 2025-11-20
++## Reality Check — 2025-11-21
+ 
+ ### Hosts + Imports
+-- `flake.nix` maps two systems that all reuse the shared module stack in `configuration.nix`.
++- `flake.nix` maps `.#vps` and `.#test-server` to their hardware + role modules and feeds the shared imports via `configuration.nix`.
+ 
+-```14:34:flake.nix
++```4:37:flake.nix
++  inputs = {
++    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
++    sops-nix.url = "github:Mic92/sops-nix";
++  };
++
++  outputs = inputs@{ nixpkgs, ... }:
++    let
++      inherit (nixpkgs) lib;
++      system = "x86_64-linux";
+       hosts = {
+         vps = {
+           hardware = ./hardware-vps.nix;
+@@ -19,84 +28,117 @@
+         lib.mapAttrs
+           (_: host:
+             lib.nixosSystem {
+-              system = "x86_64-linux";
+-              modules = commonModules ++ [ host.hardware host.role ];
++              inherit system;
++              modules = [
++                ./configuration.nix
++                host.hardware
++                host.role
++              ];
++              specialArgs = { inherit inputs; };
+             })
+           hosts;
++    };
+ ```
+ 
+-- `configuration.nix` imports `modules/common/{system,security,docker,impious-stack}.nix` plus `modules/users/app-user.nix`.
++### Common Module Stack
++- `configuration.nix` imports `sops-nix` plus the shared system, security, docker, impious-stack, and `app` user modules.
++
++```1:15:configuration.nix
++{ inputs, ... }:
+ 
+-```4:11:configuration.nix
+ {
+   imports = [
++    inputs.sops-nix.nixosModules.sops
+     ./modules/common/system.nix
+     ./modules/common/security.nix
+     ./modules/common/docker.nix
+     ./modules/common/impious-stack.nix
+     ./modules/users/app-user.nix
+   ];
++
++  system.stateVersion = "25.05";
+ }
+ ```
+ 
+ ### Impious Stack Wiring
+-- Module `modules/common/impious-stack.nix` defines typed options for `deployDir` (`types.path`), `composeFile`, TLS mode, journald fail2ban identifiers, and SOPS-backed secret/env file handling.
+-- Systemd service now runs with `CAP_NET_BIND_SERVICE`, `NoNewPrivileges`, and injects both secret + extra env files plus host-specific domains.
++- `modules/common/impious-stack.nix` defines typed options for the deployment directory, compose file, TLS mode, domains, static asset directories, secrets contract, and fail2ban identifier, then builds the hardening for `systemd.services.impious-stack`.
+ 
+-```33:215:modules/common/impious-stack.nix
++```36:210:modules/common/impious-stack.nix
+   options.services.impiousStack = {
+-    deployDir = mkOption {
+-      type = types.path;
+-      default = "/opt/impious/deploy";
+-    };
+-    tlsMode = mkOption { type = types.enum [ "enabled" "disabled" ]; };
++    enable = mkOption { type = types.bool; default = false; };
++    deployDir = mkOption { type = types.str; default = "/opt/impious/deploy"; };
++    composeFile = mkOption { type = types.str; default = "docker-compose.yml"; };
++    tlsMode = mkOption { type = types.enum [ "enabled" "disabled" ]; default = "enabled"; };
++    primaryDomain = mkOption { type = types.str; default = "impious.io"; };
++    domains = mkOption { type = types.listOf types.str; default = [ ]; };
++    staticDirs = mkOption { type = types.attrsOf types.str; default = { }; };
++    secretEnvFile = mkOption { type = types.str; default = "/var/lib/impious-stack/secrets/stack.env"; };
++    secretSopsFile = mkOption { type = types.nullOr types.path; default = null; };
++    manageSecretFile = mkOption { type = types.bool; default = true; };
++    extraEnvFiles = mkOption { type = types.listOf types.str; default = [ ]; };
+     fail2banIdentifier = mkOption { type = types.str; default = "impious-caddy"; };
+-    secretEnvFile = mkOption {
+-      type = types.path;
+-      default = "/var/lib/impious-stack/secrets/stack.env";
+-    };
+-    secretSopsFile = mkOption {
+-      type = types.nullOr types.path;
+-      default = null;
+-    };
+-    extraEnvFiles = mkOption { type = types.listOf types.path; default = [ ]; };
+   };
+ 
+   systemd.services.impious-stack = {
++    wantedBy = [ "multi-user.target" ];
+     after = [ "network-online.target" "docker.service" ];
++    requires = [ "network-online.target" "docker.service" ];
++    unitConfig.ConditionPathExists = cfg.deployDir;
+     environment = {
+       COMPOSE_FILE = cfg.composeFile;
++      COMPOSE_PROJECT_NAME = cfg.projectName;
++      IMPIOUS_ENVIRONMENT = cfg.environment;
++      CADDY_PRIMARY_DOMAIN = cfg.primaryDomain;
++      CADDY_DOMAINS = concatStringsSep "," cfg.domains;
+       CADDY_TLS_MODE = cfg.tlsMode;
+-    } // cfg.extraEnvironment;
++    } // staticEnv // cfg.extraEnvironment;
++    environmentFiles = [ cfg.secretEnvFile ] ++ cfg.extraEnvFiles;
+     serviceConfig = {
+-      User = cfg.user;
+-      WorkingDirectory = deployDir;
+-      ExecStart = "${composeBin} compose up -d --force-recreate --remove-orphans";
++      Type = "oneshot";
++      ExecStart = "${composeBin} compose --project-name ${cfg.projectName} --file ${cfg.composeFile} up -d --force-recreate --remove-orphans";
++      ExecStop = "${composeBin} compose --project-name ${cfg.projectName} --file ${cfg.composeFile} down";
+       AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];
+-      NoNewPrivileges = true;
+-    } // optionalAttrs (envFiles != [ ]) {
+-      EnvironmentFile = envFiles;
++      CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ];
++      ProtectSystem = "strict";
++      SyslogIdentifier = cfg.fail2banIdentifier;
+     };
+   };
++
++  sops.secrets.impious-stack-env = {
++    sopsFile = cfg.secretSopsFile;
++    path = cfg.secretEnvFile;
++    owner = cfg.user;
++    group = cfg.group;
++    mode = "0600";
++    format = "dotenv";
++  };
+ ```
+ 
+ ### Security Surface
+-- Firewall locked to TCP 22/80/443 and logs refusals.
+-- SSH enforces key-only auth, bans root login, disables forwarding, and restricts to the `app` user.
+-- Fail2ban stacks the sshd jail with a journald-powered `caddy-http` jail keyed off whatever identifier `services.impiousStack.fail2banIdentifier` publishes (`impious-prod-caddy` or `impious-staging-caddy`).
++- Firewall, SSH, sudo, and fail2ban hardening lives in `modules/common/security.nix`.
++
++```10:70:modules/common/security.nix
++  security.sudo.enable = true;
+ 
+-```5:84:modules/common/security.nix
+   networking.firewall = {
+     enable = true;
+     allowedTCPPorts = [ 22 80 443 ];
++    allowedUDPPorts = lib.mkDefault [ 443 ];
+     logRefusedConnections = true;
+   };
+ 
+   services.openssh = {
+     enable = true;
++    openFirewall = false;
+     settings = {
++      PermitEmptyPasswords = "no";
+       PermitRootLogin = "no";
+       PasswordAuthentication = false;
++      KbdInteractiveAuthentication = false;
++      AllowTcpForwarding = "no";
++      X11Forwarding = "no";
++      ClientAliveInterval = 300;
++      ClientAliveCountMax = 2;
+       AllowUsers = "app";
+     };
+     extraConfig = "AllowUsers app";
+@@ -104,19 +146,22 @@
+ 
+   services.fail2ban = {
+     enable = true;
++    package = pkgs.fail2ban;
+     jails = {
+       DEFAULT.settings = {
+         backend = "systemd";
+         banaction = lib.mkForce "nftables-multiport";
+         findtime = "15m";
++        bantime = "1h";
++        maxretry = 5;
+       };
+       sshd.settings = {
+         enabled = true;
+         port = "ssh";
+-        maxretry = 5;
++        logpath = "/var/log/auth.log";
+       };
+     }
+-    // optionalAttrs stackCfg.enable {
++    // lib.optionalAttrs stackCfg.enable {
+       "caddy-http".settings = {
+         enabled = true;
+         backend = "systemd";
+@@ -129,16 +174,16 @@
+   };
+ ```
+ 
++### Docker + Base System
++- `modules/common/docker.nix` enables Docker with journald logging and weekly prune jobs; `modules/common/system.nix` keeps the boot loader, swapfile, timezone, journald persistence, and base packages consistent; `modules/users/app-user.nix` defines the `app` deploy user with SSH keys.
++
+ ### Pinning Status
+-- `flake.nix` and `flake.lock` both pin `nixpkgs` to commit `4c8cdd5b1a630e8f72c9dd9bf582b1afb3127d2c`; `sops-nix` is locked at `877bb495a6f8faf0d89fc10bd142c4b7ed2bcc0b`.
+-- `README.md` now documents the `nix --extra-experimental-features 'nix-command flakes' flake update nixpkgs` dance so reviewers know how the pin moved.
++- `flake.lock` pins `nixpkgs` (25.05) at `c58bc7f5459328e4afac201c5c4feb7c818d604b` and `sops-nix` at `877bb495a6f8faf0d89fc10bd142c4b7ed2bcc0b`. Always inspect the lock alongside `flake.nix` for drift.
+ 
+ ### CI / CD
+-- `Flake CI` workflow now runs on `main`, `master`, and `dev`, installs a pinned Nix (`nixpkgs=github:NixOS/nixpkgs/4c8cdd...`), prints flake metadata, then runs `nix flake check` plus both host builds with `NIX_CONFIG: experimental-features = nix-command flakes`.
+-- `deploy-stub` workflow is `workflow_dispatch`-only with `if: ${{ false }}`; it documents the commands and secrets required to automate once SSH creds exist.
+-- Cursor code-review workflow still exists but requires its API key.
++- `Flake CI` runs on pushes/PRs to `main`, `master`, `dev`, installs a pinned Nix, runs `nix flake check`, and builds both host closures. `deploy-stub` remains disabled (`if: ${{ false }}`) until secrets land; `cursor-code-review` integrates Cursor once the API key is added.
+ 
+-```1:38:.github/workflows/flake-check.yml
++```1:40:.github/workflows/flake-check.yml
+ name: Flake CI
+ on:
+   push:
+@@ -163,7 +208,7 @@ jobs:
+       - name: Install Nix
+         uses: cachix/install-nix-action@v27
+         with:
+-          nix_path: nixpkgs=github:NixOS/nixpkgs/4c8cdd5b1a630e8f72c9dd9bf582b1afb3127d2c
++          nix_path: nixpkgs=github:NixOS/nixpkgs/c58bc7f5459328e4afac201c5c4feb7c818d604b
+       - name: Verify locked inputs
+         run: nix flake metadata
+       - name: Run nix flake check
+@@ -175,7 +220,7 @@ jobs:
+ ```
+ 
+ ### Smells & Drift Risks
+-- Upstream GitHub branch `dev` still returns HTTP 404, so the CI triggers for `dev` are future-proofing only—no way to audit parity with `main` yet.
+-- The deploy workflow is intentionally disabled until SSH + SOPS secrets land in repo settings; manual `nixos-rebuild` is still required.
+-- Compose/Caddy logs must adopt the `services.impiousStack.fail2banIdentifier` journald tag (via Docker logging options) or the HTTP jail will never fire.
+-- Actual encrypted dotenv files are not included; operators must supply `secretSopsFile` per host to make the secrets contract real.
++- No encrypted dotenvs are committed; operators must set `services.impiousStack.secretSopsFile` per host to actually provision secrets.
++- Docker Compose still relies on the source repo to emit journald logs tagged with `fail2banIdentifier`; if the compose file omits that logging config the HTTP jail never triggers.
++- GitHub CI references a hard-coded `nixpkgs` commit; keep it in sync with `flake.lock` when the pin changes.
++- `deploy-stub` is intentionally disabled until SSH keys and secrets are wired in, so deployments stay manual for now.
+diff --git a/flake.lock b/flake.lock
+new file mode 100644
+index 0000000..7c98daf
+--- /dev/null
++++ b/flake.lock
+@@ -0,0 +1,62 @@
++{
++  "nodes": {
++    "nixpkgs": {
++      "locked": {
++        "lastModified": 1763622513,
++        "narHash": "sha256-1jQnuyu82FpiSxowrF/iFK6Toh9BYprfDqfs4BB+19M=",
++        "owner": "NixOS",
++        "repo": "nixpkgs",
++        "rev": "c58bc7f5459328e4afac201c5c4feb7c818d604b",
++        "type": "github"
++      },
++      "original": {
++        "owner": "NixOS",
++        "ref": "nixos-25.05",
++        "repo": "nixpkgs",
++        "type": "github"
++      }
++    },
++    "nixpkgs_2": {
++      "locked": {
++        "lastModified": 1763191728,
++        "narHash": "sha256-esRhOS0APE6k40Hs/jjReXg+rx+J5LkWw7cuWFKlwYA=",
++        "owner": "NixOS",
++        "repo": "nixpkgs",
++        "rev": "1d4c88323ac36805d09657d13a5273aea1b34f0c",
++        "type": "github"
++      },
++      "original": {
++        "owner": "NixOS",
++        "ref": "nixpkgs-unstable",
++        "repo": "nixpkgs",
++        "type": "github"
++      }
++    },
++    "root": {
++      "inputs": {
++        "nixpkgs": "nixpkgs",
++        "sops-nix": "sops-nix"
++      }
++    },
++    "sops-nix": {
++      "inputs": {
++        "nixpkgs": "nixpkgs_2"
++      },
++      "locked": {
++        "lastModified": 1763607916,
++        "narHash": "sha256-VefBA1JWRXM929mBAFohFUtQJLUnEwZ2vmYUNkFnSjE=",
++        "owner": "Mic92",
++        "repo": "sops-nix",
++        "rev": "877bb495a6f8faf0d89fc10bd142c4b7ed2bcc0b",
++        "type": "github"
++      },
++      "original": {
++        "owner": "Mic92",
++        "repo": "sops-nix",
++        "type": "github"
++      }
++    }
++  },
++  "root": "root",
++  "version": 7
++}
+diff --git a/flake.nix b/flake.nix
+index eb4fa6f..5cb5c07 100644
+--- a/flake.nix
++++ b/flake.nix
+@@ -2,33 +2,37 @@
+   description = "NixHQ VPS NixOS config";
+ 
+   inputs = {
+-    # Pin to 25.05 release
+     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
++    sops-nix.url = "github:Mic92/sops-nix";
+   };
+ 
+-  outputs = { self, nixpkgs }: {
+-    nixosConfigurations = {
+-      vps = nixpkgs.lib.nixosSystem {
+-        system = "x86_64-linux";
+-
+-        modules = [
+-          ./configuration.nix
+-          ./hardware-vps.nix
+-          ./modules/caddy-prod.nix
+-          { networking.hostName = "impious-vps"; }
+-        ];
+-      };
+-
+-      test-server = nixpkgs.lib.nixosSystem {
+-        system = "x86_64-linux";
+-
+-        modules = [
+-          ./configuration.nix
+-          ./hardware-test-server.nix
+-          ./modules/caddy-staging.nix
+-          { networking.hostName = "test-server"; }
+-        ];
++  outputs = inputs@{ nixpkgs, ... }:
++    let
++      inherit (nixpkgs) lib;
++      system = "x86_64-linux";
++      hosts = {
++        vps = {
++          hardware = ./hardware-vps.nix;
++          role = ./hosts/vps.nix;
++        };
++        test-server = {
++          hardware = ./hardware-test-server.nix;
++          role = ./hosts/test-server.nix;
++        };
+       };
++    in {
++      nixosConfigurations =
++        lib.mapAttrs
++          (_: host:
++            lib.nixosSystem {
++              inherit system;
++              modules = [
++                ./configuration.nix
++                host.hardware
++                host.role
++              ];
++              specialArgs = { inherit inputs; };
++            })
++          hosts;
+     };
+-  };
+ }
+diff --git a/modules/caddy-prod.nix b/modules/caddy-prod.nix
+deleted file mode 100644
+index dffba71..0000000
+--- a/modules/caddy-prod.nix
++++ /dev/null
+@@ -1,31 +0,0 @@
+-{ config, lib, pkgs, ... }:
+-
+-let
+-  deployDir = "/opt/impious/deploy";
+-in
+-{
+-  systemd.services.caddy-stack = {
+-    description = "Caddy (reverse proxy) Docker stack (production)";
+-
+-    wantedBy = [ "multi-user.target" ];
+-
+-    # Make sure network + Docker are up first
+-    after    = [ "network-online.target" "docker.service" ];
+-    requires = [ "network-online.target" "docker.service" ];
+-
+-    # Only start if the deploy dir exists
+-    unitConfig = {
+-      ConditionPathExists = deployDir;
+-    };
+-
+-    serviceConfig = {
+-      WorkingDirectory = deployDir;
+-
+-      ExecStart = "${pkgs.docker-compose}/bin/docker-compose up -d";
+-      ExecStop  = "${pkgs.docker-compose}/bin/docker-compose down";
+-
+-      Type            = "oneshot";
+-      RemainAfterExit = true;
+-    };
+-  };
+-}
+diff --git a/modules/caddy-staging.nix b/modules/caddy-staging.nix
+deleted file mode 100644
+index 2334ec1..0000000
+--- a/modules/caddy-staging.nix
++++ /dev/null
+@@ -1,29 +0,0 @@
+-{ config, lib, pkgs, ... }:
+-
+-let
+-  deployDir = "/opt/impious/deploy";
+-in
+-{
+-  systemd.services.caddy-stack = {
+-    description = "Caddy (reverse proxy) Docker stack (staging)";
+-
+-    wantedBy = [ "multi-user.target" ];
+-
+-    after    = [ "network-online.target" "docker.service" ];
+-    requires = [ "network-online.target" "docker.service" ];
+-
+-    unitConfig = {
+-      ConditionPathExists = deployDir;
+-    };
+-
+-    serviceConfig = {
+-      WorkingDirectory = deployDir;
+-
+-      ExecStart = "${pkgs.docker-compose}/bin/docker-compose up -d";
+-      ExecStop  = "${pkgs.docker-compose}/bin/docker-compose down";
+-
+-      Type            = "oneshot";
+-      RemainAfterExit = true;
+-    };
+-  };
+-}
+diff --git a/modules/common/docker.nix b/modules/common/docker.nix
+new file mode 100644
+index 0000000..40c873b
+--- /dev/null
++++ b/modules/common/docker.nix
+@@ -0,0 +1,28 @@
++{ lib, pkgs, ... }:
++
++{
++  ###################################### Docker ########################################
++  virtualisation.docker = {
++    enable = true;
++    package = pkgs.docker;
++    autoPrune = {
++      enable = true;
++      dates = "weekly";
++      flags = [ "--all" "--force" "--volumes" ];
++    };
++    daemon.settings = {
++      "log-driver" = "journald";
++      "log-opts" = {
++        "mode" = "non-blocking";
++        "max-buffer-size" = "8m";
++        "tag" = "{{.Name}}";
++      };
++      "live-restore" = true;
++    };
++  };
++
++  ##################################### Directories #####################################
++  systemd.tmpfiles.rules = [
++    "d /opt/impious 0755 app docker -"
++  ];
++}
+diff --git a/modules/common/impious-stack.nix b/modules/common/impious-stack.nix
+new file mode 100644
+index 0000000..32a30cb
+--- /dev/null
++++ b/modules/common/impious-stack.nix
+@@ -0,0 +1,210 @@
++{ config, lib, pkgs, ... }:
++
++with lib;
++
++let
++  cfg = config.services.impiousStack;
++
++  staticEnv =
++    mapAttrs'
++      (name: path: {
++        name = "IMPIOUS_STATIC_${strings.toUpper (replaceStrings [ "-" ] [ "_" ] name)}";
++        value = path;
++      })
++      cfg.staticDirs;
++
++  envFiles = [ cfg.secretEnvFile ] ++ cfg.extraEnvFiles;
++
++  secretDir = builtins.dirOf cfg.secretEnvFile;
++
++  baseTmpfiles = [
++    "d ${cfg.deployDir} 2775 ${cfg.user} ${cfg.group} -"
++    "d ${secretDir} 0750 ${cfg.user} ${cfg.group} -"
++  ];
++
++  staticTmpfiles =
++    mapAttrsToList (_: path: "d ${path} 0755 ${cfg.user} ${cfg.group} -") cfg.staticDirs;
++
++  placeholderSecretRule =
++    optional
++      (cfg.manageSecretFile && cfg.secretSopsFile == null)
++      "f ${cfg.secretEnvFile} 0600 ${cfg.user} ${cfg.group} -";
++
++  composeBin = "${pkgs.docker}/bin/docker";
++in
++{
++  options.services.impiousStack = {
++    enable = mkOption {
++      type = types.bool;
++      default = false;
++      description = "Whether to manage the Impious Docker stack.";
++    };
++
++    user = mkOption {
++      type = types.str;
++      default = "app";
++      description = "System user that owns the deployment directory and runs docker compose.";
++    };
++
++    group = mkOption {
++      type = types.str;
++      default = "docker";
++      description = "Primary group that should own writable assets.";
++    };
++
++    environment = mkOption {
++      type = types.enum [ "production" "staging" "development" ];
++      default = "production";
++      description = "Deployment environment name injected as IMPIOUS_ENVIRONMENT.";
++    };
++
++    deployDir = mkOption {
++      type = types.str;
++      default = "/opt/impious/deploy";
++      description = "Directory containing the docker-compose project.";
++    };
++
++    composeFile = mkOption {
++      type = types.str;
++      default = "docker-compose.yml";
++      description = "Compose file path relative to deployDir.";
++    };
++
++    projectName = mkOption {
++      type = types.str;
++      default = "impious";
++      description = "Compose project name (maps to container prefixes).";
++    };
++
++    tlsMode = mkOption {
++      type = types.enum [ "enabled" "disabled" ];
++      default = "enabled";
++      description = "Controls whether Caddy requests real ACME certs.";
++    };
++
++    primaryDomain = mkOption {
++      type = types.str;
++      default = "impious.io";
++      description = "Primary HTTP domain used by Caddy.";
++    };
++
++    domains = mkOption {
++      type = types.listOf types.str;
++      default = [ ];
++      description = "Additional HTTP domains for the stack.";
++    };
++
++    staticDirs = mkOption {
++      type = types.attrsOf types.str;
++      default = { };
++      example = { site = "/opt/impious/deploy/site"; };
++      description = "Static directories that should exist before compose runs.";
++    };
++
++    extraEnvironment = mkOption {
++      type = types.attrsOf types.str;
++      default = { };
++      description = "Extra environment variables injected into the service.";
++    };
++
++    secretEnvFile = mkOption {
++      type = types.str;
++      default = "/var/lib/impious-stack/secrets/stack.env";
++      description = "Path to the dotenv file consumed by docker compose.";
++    };
++
++    secretSopsFile = mkOption {
++      type = types.nullOr types.path;
++      default = null;
++      description = "Optional encrypted dotenv to materialize via sops-nix.";
++    };
++
++    manageSecretFile = mkOption {
++      type = types.bool;
++      default = true;
++      description = "Whether to ensure the secret env file exists (via SOPS or tmpfiles).";
++    };
++
++    extraEnvFiles = mkOption {
++      type = types.listOf types.str;
++      default = [ ];
++      description = "Additional EnvironmentFile= entries to include.";
++    };
++
++    fail2banIdentifier = mkOption {
++      type = types.str;
++      default = "impious-caddy";
++      description = "Identifier used by fail2ban to hook journald logs.";
++    };
++  };
++
++  config = mkMerge [
++    (mkIf cfg.enable {
++      systemd.tmpfiles.rules =
++        baseTmpfiles
++        ++ staticTmpfiles
++        ++ placeholderSecretRule;
++
++      systemd.services.impious-stack = {
++        description = "Impious docker compose stack";
++        wantedBy = [ "multi-user.target" ];
++        after = [ "network-online.target" "docker.service" ];
++        requires = [ "network-online.target" "docker.service" ];
++        unitConfig.ConditionPathExists = cfg.deployDir;
++
++        path = [ pkgs.coreutils pkgs.gnugrep pkgs.util-linux pkgs.docker ];
++
++        environment =
++          {
++            COMPOSE_FILE = cfg.composeFile;
++            COMPOSE_PROJECT_NAME = cfg.projectName;
++            IMPIOUS_ENVIRONMENT = cfg.environment;
++            CADDY_PRIMARY_DOMAIN = cfg.primaryDomain;
++            CADDY_DOMAINS = concatStringsSep "," cfg.domains;
++            CADDY_TLS_MODE = cfg.tlsMode;
++            IMPIOUS_DEPLOY_DIR = cfg.deployDir;
++          }
++          // staticEnv
++          // cfg.extraEnvironment;
++
++        environmentFiles = envFiles;
++
++        serviceConfig = {
++          Type = "oneshot";
++          RemainAfterExit = true;
++          User = cfg.user;
++          Group = cfg.group;
++          WorkingDirectory = cfg.deployDir;
++          SyslogIdentifier = cfg.fail2banIdentifier;
++          ExecStart = "${composeBin} compose --project-name ${cfg.projectName} --file ${cfg.composeFile} up -d --force-recreate --remove-orphans";
++          ExecStop = "${composeBin} compose --project-name ${cfg.projectName} --file ${cfg.composeFile} down";
++          TimeoutStartSec = "5min";
++          TimeoutStopSec = "120s";
++          KillMode = "mixed";
++          AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];
++          CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ];
++          NoNewPrivileges = true;
++          PrivateTmp = true;
++          ProtectHome = "read-only";
++          ProtectSystem = "strict";
++          ReadWritePaths = [
++            cfg.deployDir
++            "/var/lib/docker"
++            "/run/docker.sock"
++          ];
++        };
++      };
++    })
++
++    (mkIf (cfg.manageSecretFile && cfg.secretSopsFile != null) {
++      sops.secrets.impious-stack-env = {
++        sopsFile = cfg.secretSopsFile;
++        path = cfg.secretEnvFile;
++        owner = cfg.user;
++        group = cfg.group;
++        mode = "0600";
++        format = "dotenv";
++      };
++    })
++  ];
++}
+diff --git a/modules/common/security.nix b/modules/common/security.nix
+new file mode 100644
+index 0000000..514ca6d
+--- /dev/null
++++ b/modules/common/security.nix
+@@ -0,0 +1,71 @@
++{ config, lib, pkgs, ... }:
++
++let
++  stackCfg = config.services.impiousStack or {
++    enable = false;
++    fail2banIdentifier = "impious-caddy";
++  };
++in
++{
++  ###################################### Sudo ##########################################
++  security.sudo.enable = true;
++
++  #################################### Networking #####################################
++  networking.firewall = {
++    enable = true;
++    allowedTCPPorts = [ 22 80 443 ];
++    allowedUDPPorts = lib.mkDefault [ 443 ];
++    logRefusedConnections = true;
++  };
++
++  ###################################### SSH ###########################################
++  services.openssh = {
++    enable = true;
++    openFirewall = false;
++    settings = {
++      PermitEmptyPasswords = "no";
++      PermitRootLogin = "no";
++      PasswordAuthentication = false;
++      KbdInteractiveAuthentication = false;
++      AllowTcpForwarding = "no";
++      X11Forwarding = "no";
++      ClientAliveInterval = 300;
++      ClientAliveCountMax = 2;
++      AllowUsers = "app";
++    };
++    extraConfig = "AllowUsers app";
++  };
++
++  #################################### Security ########################################
++  services.fail2ban = {
++    enable = true;
++    package = pkgs.fail2ban;
++    jails = {
++      DEFAULT.settings = {
++        backend = "systemd";
++        banaction = lib.mkForce "nftables-multiport";
++        findtime = "15m";
++        bantime = "1h";
++        maxretry = 5;
++      };
++      sshd.settings = {
++        enabled = true;
++        port = "ssh";
++        logpath = "/var/log/auth.log";
++      };
++    }
++    // lib.optionalAttrs stackCfg.enable {
++      "caddy-http".settings = {
++        enabled = true;
++        backend = "systemd";
++        journalmatch = "SYSLOG_IDENTIFIER=${stackCfg.fail2banIdentifier}";
++        maxretry = 10;
++        findtime = "10m";
++        bantime = "1h";
++        failregex = ''
++          <HOST> .*"(GET|POST|HEAD|PUT|DELETE|PATCH|OPTIONS) [^"]+" (40\d|41\d|42\d|43\d|44\d|50\d|51\d|52\d|53\d)
++        '';
++      };
++    };
++  };
++}
+diff --git a/modules/common/system.nix b/modules/common/system.nix
+new file mode 100644
+index 0000000..eb29adf
+--- /dev/null
++++ b/modules/common/system.nix
+@@ -0,0 +1,31 @@
++{ pkgs, ... }:
++
++{
++  #################################### Boot Loader ####################################
++  boot.loader.grub = {
++    enable = true;
++    device = "/dev/vda";
++  };
++
++  ###################################### Swap #########################################
++  swapDevices = [
++    { device = "/swapfile"; size = 2048; }
++  ];
++
++  ###################################### Timezone ######################################
++  time.timeZone = "America/Detroit";
++
++  ################################### System Logs ######################################
++  services.journald.extraConfig = "Storage=persistent";
++
++  ############################ System Packages (Global) #################################
++  environment.systemPackages = with pkgs; [
++    git
++    nano
++    htop
++    docker-compose
++  ];
++
++  #################################### Flake Support ###################################
++  nix.settings.experimental-features = [ "nix-command" "flakes" ];
++}
+diff --git a/modules/users/app-user.nix b/modules/users/app-user.nix
+new file mode 100644
+index 0000000..e7ceae3
+--- /dev/null
++++ b/modules/users/app-user.nix
+@@ -0,0 +1,17 @@
++{ pkgs, ... }:
++
++{
++  users.groups.app = { };
++
++  users.users.app = {
++    isNormalUser = true;
++    description = "App deployment user";
++    home = "/home/app";
++    shell = pkgs.bashInteractive;
++    group = "app";
++    extraGroups = [ "wheel" "docker" ];
++    openssh.authorizedKeys.keys = [
++      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIACt+4DDr57ov4803wmOWqw3umfSFPjTMHUTNNNvr0By eddsa-key-20251115"
++    ];
++  };
++}
