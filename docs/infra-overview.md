@@ -80,6 +80,17 @@ Adjustments to these controls must be reviewed carefully—loosening them affect
 
 ---
 
+### Containerized Caddy Stack
+
+- Caddy is **only** provided via Docker; there is no `services.caddy` unit on the hosts.
+- Compose root: `/opt/impious/deploy`, matching the `services.caddyStack.deployDir` default (staging pins it explicitly in `hosts/test-server.nix`).
+- Expected containers today: `caddy` (reverse proxy) and `enlist-api`. Additional lore/game services can be added to the same compose file later.
+- Host-specific compose files are referenced via `services.caddyStack.composeFile` (staging uses `docker-compose.dev.yml`; production keeps the default).
+- Systemd integration: the `caddy-stack` unit waits for `docker.service`, exports `COMPOSE_FILE` and `COMPOSE_PROJECT_NAME`, and then runs `docker-compose up --remove-orphans`. A restart of the unit is equivalent to `docker compose up -d` and ensures the stack comes back on boot.
+- Operators interact with the stack via `systemctl status|restart caddy-stack` and `docker ps`. Compose logs stream through the unit’s journal so `journalctl -u caddy-stack` shows the proxy + API containers together.
+
+---
+
 ### CI Guarantees
 
 - `.github/workflows/flake-check.yml` runs `nix flake check` on pushes and pull requests to `main`/`master`

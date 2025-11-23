@@ -12,6 +12,8 @@
   services.caddyStack = {
     enable = true;
     environment = "staging";
+    deployDir = "/opt/impious/deploy";
     composeFile = "docker-compose.dev.yml";
+    projectName = "impious-staging";
   };
 }
