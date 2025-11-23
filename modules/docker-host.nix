@@ -1,8 +1,10 @@
-{ lib, ... }:
+{ lib, pkgs, ... }:
 {
   ###################################### Docker ########################################
   virtualisation.docker = {
     enable = true;
+    enableOnBoot = true;
+    package = pkgs.docker; # ships the docker CLI + compose plugin
     autoPrune = {
       enable = true;
       dates = "weekly";
